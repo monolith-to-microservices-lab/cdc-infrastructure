@@ -1,0 +1,109 @@
+# ---------------------------------------------------------------------------
+# cdc-infrastructure
+#
+# This repository owns ONLY the CDC / messaging plane:
+#   Legacy PostgreSQL  ->  Debezium (Kafka Connect)  ->  Kafka topics
+#
+# It does NOT contain the monolith, the user-service or the sales-service.
+# Those live in their own repositories with their own compose files.
+#
+# All containers that need to talk to each other join the EXTERNAL, shared
+# network `migration-network`. Create it once (see README):
+#     docker network create migration-network
+# ---------------------------------------------------------------------------
+name: cdc-infrastructure
+
+services:
+  # -------------------------------------------------------------------------
+  # Kafka - single broker, KRaft mode (NO ZooKeeper).
+  # -------------------------------------------------------------------------
+  kafka:
+    image: apache/kafka:3.9.1
+    container_name: cdc-kafka
+    ports:
+      # host:container - the host port is only for inspection tools running
+      # on the host. Containers must use  kafka:9092  (see below).
+      - "${KAFKA_HOST_PORT:-9092}:29092"
+    environment:
+      # --- KRaft single-node: this one node is both broker and controller ---
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      CLUSTER_ID: "${KAFKA_CLUSTER_ID:-5Yr1SIgYQz-b-dgRabWx4g}"
+
+      # --- Listeners --------------------------------------------------------
+      #  BROKER      (9092)  -> traffic from other CONTAINERS on migration-network
+      #  CONTROLLER  (9093)  -> internal KRaft quorum
+      #  HOST        (29092) -> published to the host as ${KAFKA_HOST_PORT}
+      KAFKA_LISTENERS: "BROKER://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,HOST://0.0.0.0:29092"
+      KAFKA_ADVERTISED_LISTENERS: "BROKER://kafka:9092,HOST://localhost:${KAFKA_HOST_PORT:-9092}"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,BROKER:PLAINTEXT,HOST:PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "BROKER"
+
+      # --- Single-node replication factors --------------------------------
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - migration-network
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 20s
+
+  # -------------------------------------------------------------------------
+  # Kafka Connect with the Debezium connectors baked in.
+  # The Debezium PostgreSQL connector is already on the classpath of this image.
+  # Connect stores its own config/offsets/status in Kafka topics (not a volume),
+  # so a container restart does NOT lose the connector or its stream position.
+  # -------------------------------------------------------------------------
+  connect:
+    image: quay.io/debezium/connect:3.1
+    container_name: cdc-connect
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "${CONNECT_HOST_PORT:-8083}:8083"
+    environment:
+      BOOTSTRAP_SERVERS: "kafka:9092"
+      GROUP_ID: "${CONNECT_GROUP_ID:-cdc-connect-cluster}"
+
+      # Internal Connect topics - survive restarts, this is why the connector
+      # resumes instead of re-snapshotting.
+      CONFIG_STORAGE_TOPIC: "_connect_configs"
+      OFFSET_STORAGE_TOPIC: "_connect_offsets"
+      STATUS_STORAGE_TOPIC: "_connect_status"
+      CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      STATUS_STORAGE_REPLICATION_FACTOR: "1"
+      OFFSET_FLUSH_INTERVAL_MS: "10000"
+
+      # Keep the raw Debezium envelope, plain JSON, no schema wrapper, no SMT.
+      KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+    networks:
+      - migration-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+volumes:
+  kafka_data:
+
+networks:
+  migration-network:
+    external: true

@@ -1,0 +1,11 @@
+# Secrets / local environment
+.env
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+
+# Local scratch output
+*.log
+tmp/
