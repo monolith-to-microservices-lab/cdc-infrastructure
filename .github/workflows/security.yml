@@ -1,0 +1,38 @@
+# Security - this repository holds compose files, scripts and connector config
+# (no application code, no Dockerfile, no dependency manifest), so the relevant
+# scan is secrets. The images it runs are upstream pinned tags.
+name: Security
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  security:
+    name: Security
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # secret scan needs the whole history
+
+      - name: Secret scan (gitleaks, full history, redacted)
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo --entrypoint sh ghcr.io/gitleaks/gitleaks:v8.30.1 -c \
+            "git config --global --add safe.directory /repo && gitleaks git . --redact --no-banner --exit-code 1" \
+            2>&1 | tee gitleaks.log
+          # Guard against a silent pass: 0 commits scanned means gitleaks could not read the repo.
+          grep -Eq "[1-9][0-9]* commits scanned" gitleaks.log

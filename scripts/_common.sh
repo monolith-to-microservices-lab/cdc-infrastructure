@@ -16,6 +16,8 @@ if [[ -f "${ROOT_DIR}/.env" ]]; then
 fi
 
 KAFKA_CONTAINER="${KAFKA_CONTAINER:-cdc-kafka}"
+# Used by the scripts that source this file, not here.
+# shellcheck disable=SC2034
 CONNECT_URL="http://localhost:${CONNECT_HOST_PORT:-8083}"
 LEGACY_PG_CONTAINER="${LEGACY_PG_CONTAINER:-monolito-microservice-postgres-1}"
 LEGACY_PG_ADMIN_USER="${LEGACY_PG_ADMIN_USER:-postgres}"

@@ -1,0 +1,67 @@
+# CI - every PR to main and every push to main. Validation only: nothing here
+# connects to an external environment or runs a destructive operation.
+#
+#   Lint   shell scripts (ShellCheck) + connector config JSON (real parser)
+#   Build  docker compose config + pull of the exact pinned images
+#
+# The CDC pipeline itself (Postgres WAL -> Debezium -> Kafka -> consumers) is
+# exercised end to end by migration-e2e-tests ("E2E Smoke").
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: shellcheck (follows sourced files)
+        run: |
+          git ls-files -z '*.sh' | xargs -0 docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.11.0 \
+            -x --source-path=SCRIPTDIR --severity=warning
+
+      - name: Connector config JSON
+        # Must parse, and must keep the lab's CDC identities (slot/publication/
+        # topic prefix come from .env; the template must reference them).
+        run: |
+          jq -e '
+            .config["connector.class"] == "io.debezium.connector.postgresql.PostgresConnector"
+            and .config["plugin.name"] == "pgoutput"
+            and .config["slot.name"] == "${REPLICATION_SLOT_NAME}"
+            and .config["publication.name"] == "${PUBLICATION_NAME}"
+            and .config["publication.autocreate.mode"] == "disabled"
+            and .config["table.include.list"] == "public.users,public.sales"
+          ' debezium/register-connector.json
+
+      - name: .env.example defines the stable CDC identities
+        run: |
+          grep -qx 'CONNECTOR_NAME=legacy-cdc-connector'          .env.example
+          grep -qx 'REPLICATION_SLOT_NAME=legacy_cdc_slot'        .env.example
+          grep -qx 'PUBLICATION_NAME=legacy_cdc_publication'      .env.example
+          grep -qx 'TOPIC_PREFIX=legacy'                          .env.example
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: docker compose config
+        run: docker compose config --quiet
+      - name: Pull the pinned images (tags exist and are reachable)
+        run: docker compose pull --quiet

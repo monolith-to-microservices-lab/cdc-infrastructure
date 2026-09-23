@@ -791,3 +791,16 @@ cdc-infrastructure/
 │   └── connector-restart.sh      # REST restart (Test 6)
 └── README.md                     # this file
 ```
+
+## CI
+
+Validation only - CI never connects to an external environment and never runs a
+destructive operation.
+
+| Workflow | Job | What it proves |
+|---|---|---|
+| `ci.yml` | **Lint** | ShellCheck on every script (following sourced files), connector JSON parsed with `jq` and checked for the stable CDC identities (`pgoutput`, slot, publication, table list), `.env.example` keeps `legacy-cdc-connector` / `legacy_cdc_slot` / `legacy_cdc_publication` / `legacy` |
+| | **Build** | `docker compose config` + `docker compose pull` (pinned tags exist) |
+| `security.yml` | **Security** | Gitleaks over the full history (redacted). Also weekly. |
+
+The CDC pipeline itself runs for real in `migration-e2e-tests` (**E2E Smoke** on every PR there).
