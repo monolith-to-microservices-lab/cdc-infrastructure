@@ -92,6 +92,17 @@ services:
       VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
       CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
       CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+
+      # --- Observability (added for observability-infrastructure) ----------
+      # Exposes JMX so a remote jmx-exporter sidecar (in the observability
+      # repo) can read connector/task/Debezium metrics. This does NOT touch
+      # the connector config, the replication slot, or kafka_data - it is
+      # purely a JVM flag on this container. Best-effort: if unreachable,
+      # only the Debezium-internals dashboard panels go empty; everything
+      # else (connector RUNNING/FAILED status, consumer metrics) is
+      # unaffected.
+      JMXPORT: "9012"
+      JMXHOST: "connect"
     networks:
       - migration-network
     healthcheck:
